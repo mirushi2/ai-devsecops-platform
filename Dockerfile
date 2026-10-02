@@ -10,6 +10,10 @@ FROM python:3.13-slim AS runtime
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /install /usr/local
 
 COPY app ./app
