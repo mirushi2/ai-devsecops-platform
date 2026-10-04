@@ -1,4 +1,4 @@
-# DevSecOps CI/CD automation test 1
+# DevSecOps CI/CD automation
 from fastapi import FastAPI
 
 app = FastAPI(
