@@ -22,7 +22,7 @@ def load_ai_input() -> dict:
                 f"AI input file not found: {path}"
             )
 
-        with path.open("r", encoding="utf-8") as file:
+        with path.open("r", encoding="utf-8-sig") as file:
             data = json.load(file)
 
         if not isinstance(data, dict):
