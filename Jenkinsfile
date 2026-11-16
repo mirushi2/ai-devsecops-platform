@@ -287,20 +287,26 @@ pipeline {
             }
         }
 
+        
         stage('Install Dependencies') {
             steps {
                 sh '''
                     set +e
 
-                    .venv/bin/pip install -r requirements.txt \
+                    .venv/bin/pip install \
+                        -r requirements.txt \
+                        -r ai/requirements.txt \
                         > ai/reports/dependencies.log 2>&1
 
                     RESULT=$?
+
                     cat ai/reports/dependencies.log
+
                     exit "$RESULT"
                 '''
             }
         }
+
 
         
         stage('Run Tests') {
