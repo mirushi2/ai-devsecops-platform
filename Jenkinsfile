@@ -302,9 +302,14 @@ pipeline {
             }
         }
 
+        
         stage('Run Tests') {
             steps {
                 sh '''
+                    mkdir -p ai/reports
+
+                    export PYTHONPATH="$WORKSPACE${PYTHONPATH:+:$PYTHONPATH}"
+
                     set +e
 
                     .venv/bin/pytest \
@@ -314,7 +319,9 @@ pipeline {
                         > ai/reports/pytest.log 2>&1
 
                     RESULT=$?
+
                     cat ai/reports/pytest.log
+
                     exit "$RESULT"
                 '''
             }
