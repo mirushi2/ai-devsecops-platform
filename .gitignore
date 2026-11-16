@@ -7,3 +7,13 @@ test-results.xml
 htmlcov/
 .env
 *.pyc
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+# DevSecOps AI diagnostic outputs
+ai/reports/
+*.diagnostics.json
+*.jenkins.log
+# Local backup - do not push
+ai_backup/
