@@ -240,6 +240,7 @@
 //     }
 // }
 
+
 pipeline {
     agent any
 
@@ -268,26 +269,53 @@ pipeline {
         stage('Setup Python') {
             steps {
                 sh '''
-                    python3.13 -m venv .venv
-                    .venv/bin/python --version
-                    .venv/bin/pip install --upgrade pip
+                    mkdir -p ai/reports
+
+                    set +e
+                    python3.13 -m venv .venv \
+                        > ai/reports/setup.log 2>&1
+                    RESULT=$?
+
+                    .venv/bin/python --version \
+                        >> ai/reports/setup.log 2>&1
+                    .venv/bin/pip install --upgrade pip \
+                        >> ai/reports/setup.log 2>&1
+
+                    cat ai/reports/setup.log
+                    exit "$RESULT"
                 '''
             }
         }
 
         stage('Install Dependencies') {
             steps {
-                sh '.venv/bin/pip install -r requirements.txt'
+                sh '''
+                    set +e
+
+                    .venv/bin/pip install -r requirements.txt \
+                        > ai/reports/dependencies.log 2>&1
+
+                    RESULT=$?
+                    cat ai/reports/dependencies.log
+                    exit "$RESULT"
+                '''
             }
         }
 
         stage('Run Tests') {
             steps {
                 sh '''
+                    set +e
+
                     .venv/bin/pytest \
                         --cov=app \
                         --cov-report=term-missing \
-                        --cov-fail-under=80
+                        --cov-fail-under=80 \
+                        > ai/reports/pytest.log 2>&1
+
+                    RESULT=$?
+                    cat ai/reports/pytest.log
+                    exit "$RESULT"
                 '''
             }
         }
@@ -295,8 +323,23 @@ pipeline {
         stage('Dependency Security Scan') {
             steps {
                 sh '''
-                    .venv/bin/pip install pip-audit
-                    .venv/bin/pip-audit -r requirements.txt
+                    set +e
+
+                    .venv/bin/pip install pip-audit \
+                        > ai/reports/pip_audit.log 2>&1
+
+                    INSTALL_RESULT=$?
+
+                    if [ "$INSTALL_RESULT" -eq 0 ]; then
+                        .venv/bin/pip-audit -r requirements.txt \
+                            >> ai/reports/pip_audit.log 2>&1
+                        RESULT=$?
+                    else
+                        RESULT=$INSTALL_RESULT
+                    fi
+
+                    cat ai/reports/pip_audit.log
+                    exit "$RESULT"
                 '''
             }
         }
@@ -304,29 +347,48 @@ pipeline {
         stage('Trivy FS Scan') {
             steps {
                 sh '''
+                    set +e
+
                     trivy fs \
                         --exit-code 1 \
                         --severity HIGH,CRITICAL \
-                        .
+                        . > ai/reports/trivy_fs.log 2>&1
+
+                    RESULT=$?
+                    cat ai/reports/trivy_fs.log
+                    exit "$RESULT"
                 '''
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
-                sh '.venv/bin/pip install pysonar'
+                sh '''
+                    set +e
+
+                    .venv/bin/pip install pysonar \
+                        > ai/reports/sonar.log 2>&1
+
+                    RESULT=$?
+                    cat ai/reports/sonar.log
+                    exit "$RESULT"
+                '''
 
                 withCredentials([
-                    string(
-                        credentialsId: 'sonar-token',
-                        variable: 'SONAR_TOKEN'
-                    )
+                    string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')
                 ]) {
                     sh '''
+                        set +e
+
                         .venv/bin/pysonar \
                             --sonar-host-url=http://localhost:9000 \
                             --sonar-token="$SONAR_TOKEN" \
-                            --sonar-project-key=AI-DevSecOps-Platform
+                            --sonar-project-key=AI-DevSecOps-Platform \
+                            >> ai/reports/sonar.log 2>&1
+
+                        RESULT=$?
+                        cat ai/reports/sonar.log
+                        exit "$RESULT"
                     '''
                 }
             }
@@ -335,11 +397,18 @@ pipeline {
         stage('ECR Login') {
             steps {
                 sh '''
+                    set +e
+
                     aws ecr get-login-password \
                         --region "$AWS_REGION" | \
                     docker login \
                         --username AWS \
-                        --password-stdin "$ECR_REGISTRY"
+                        --password-stdin "$ECR_REGISTRY" \
+                        > ai/reports/ecr_login.log 2>&1
+
+                    RESULT=$?
+                    cat ai/reports/ecr_login.log
+                    exit "$RESULT"
                 '''
             }
         }
@@ -347,13 +416,18 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
+                    set +e
                     export DOCKER_BUILDKIT=0
 
                     docker build \
                         --platform linux/amd64 \
                         -t "$IMAGE_REPO:$BUILD_NUMBER" \
                         -t "$IMAGE_REPO:latest" \
-                        .
+                        . > ai/reports/docker_build.log 2>&1
+
+                    RESULT=$?
+                    cat ai/reports/docker_build.log
+                    exit "$RESULT"
                 '''
             }
         }
@@ -361,10 +435,17 @@ pipeline {
         stage('Trivy Image Scan') {
             steps {
                 sh '''
+                    set +e
+
                     trivy image \
                         --exit-code 1 \
                         --severity CRITICAL \
-                        "$IMAGE_REPO:$BUILD_NUMBER"
+                        "$IMAGE_REPO:$BUILD_NUMBER" \
+                        > ai/reports/trivy_image.log 2>&1
+
+                    RESULT=$?
+                    cat ai/reports/trivy_image.log
+                    exit "$RESULT"
                 '''
             }
         }
@@ -372,8 +453,20 @@ pipeline {
         stage('Push to ECR') {
             steps {
                 sh '''
-                    docker push "$IMAGE_REPO:$BUILD_NUMBER"
-                    docker push "$IMAGE_REPO:latest"
+                    set +e
+
+                    docker push "$IMAGE_REPO:$BUILD_NUMBER" \
+                        > ai/reports/ecr_push.log 2>&1
+                    RESULT=$?
+
+                    if [ "$RESULT" -eq 0 ]; then
+                        docker push "$IMAGE_REPO:latest" \
+                            >> ai/reports/ecr_push.log 2>&1
+                        RESULT=$?
+                    fi
+
+                    cat ai/reports/ecr_push.log
+                    exit "$RESULT"
                 '''
             }
         }
@@ -381,34 +474,60 @@ pipeline {
         stage('Deploy to EKS') {
             steps {
                 sh '''
-                    echo "Deploying image:"
-                    echo "$IMAGE_REPO:$BUILD_NUMBER"
+                    set +e
 
-                    kubectl apply -f k8s/namespace.yml
-                    kubectl apply -f k8s/deployment.yaml
-                    kubectl apply -f k8s/service.yml
+                    {
+                        echo "Deploying image: $IMAGE_REPO:$BUILD_NUMBER"
 
-                    kubectl -n "$K8S_NAMESPACE" set image \
-                        deployment/"$K8S_DEPLOYMENT" \
-                        "$K8S_CONTAINER=$IMAGE_REPO:$BUILD_NUMBER"
+                        kubectl apply -f k8s/namespace.yml
+                        RESULT=$?
 
-                    if ! kubectl -n "$K8S_NAMESPACE" rollout status \
-                        deployment/"$K8S_DEPLOYMENT" \
-                        --timeout=120s
-                    then
-                        echo "Rollout failed. Rolling back deployment."
+                        if [ "$RESULT" -eq 0 ]; then
+                            kubectl apply -f k8s/deployment.yaml
+                            RESULT=$?
+                        fi
 
-                        kubectl -n "$K8S_NAMESPACE" rollout undo \
-                            deployment/"$K8S_DEPLOYMENT"
+                        if [ "$RESULT" -eq 0 ]; then
+                            kubectl apply -f k8s/service.yml
+                            RESULT=$?
+                        fi
 
-                        kubectl -n "$K8S_NAMESPACE" rollout status \
-                            deployment/"$K8S_DEPLOYMENT" \
-                            --timeout=120s || true
+                        if [ "$RESULT" -eq 0 ]; then
+                            kubectl -n "$K8S_NAMESPACE" set image \
+                                deployment/"$K8S_DEPLOYMENT" \
+                                "$K8S_CONTAINER=$IMAGE_REPO:$BUILD_NUMBER"
+                            RESULT=$?
+                        fi
 
-                        exit 1
-                    fi
+                        if [ "$RESULT" -eq 0 ]; then
+                            echo "Waiting for rollout..."
 
-                    echo "Rollout completed successfully."
+                            kubectl -n "$K8S_NAMESPACE" rollout status \
+                                deployment/"$K8S_DEPLOYMENT" \
+                                --timeout=120s
+                            RESULT=$?
+                        fi
+
+                        if [ "$RESULT" -ne 0 ]; then
+                            echo "Deployment or rollout failed."
+                            echo "Attempting rollback..."
+
+                            kubectl -n "$K8S_NAMESPACE" rollout undo \
+                                deployment/"$K8S_DEPLOYMENT"
+
+                            kubectl -n "$K8S_NAMESPACE" rollout status \
+                                deployment/"$K8S_DEPLOYMENT" \
+                                --timeout=120s || true
+
+                            exit 1
+                        fi
+
+                        echo "Rollout completed successfully."
+                    } > ai/reports/deployment.log 2>&1
+
+                    RESULT=$?
+                    cat ai/reports/deployment.log
+                    exit "$RESULT"
                 '''
             }
         }
@@ -416,9 +535,27 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 sh '''
-                    kubectl -n "$K8S_NAMESPACE" get deployment "$K8S_DEPLOYMENT"
-                    kubectl -n "$K8S_NAMESPACE" get pods -o wide
-                    kubectl -n "$K8S_NAMESPACE" get service
+                    set +e
+
+                    {
+                        echo "Deployment status:"
+                        kubectl -n "$K8S_NAMESPACE" get deployment "$K8S_DEPLOYMENT"
+
+                        echo "Pods:"
+                        kubectl -n "$K8S_NAMESPACE" get pods -o wide
+
+                        echo "Service:"
+                        kubectl -n "$K8S_NAMESPACE" get service
+
+                        echo "Application image:"
+                        kubectl -n "$K8S_NAMESPACE" get deployment "$K8S_DEPLOYMENT" \
+                            -o jsonpath='{.spec.template.spec.containers[0].image}'
+                        echo ""
+                    } > ai/reports/kubernetes_verify.log 2>&1
+
+                    RESULT=$?
+                    cat ai/reports/kubernetes_verify.log
+                    exit "$RESULT"
                 '''
             }
         }
@@ -434,65 +571,96 @@ pipeline {
         failure {
             echo 'CI/CD pipeline failed. Starting AI diagnosis.'
 
-            withCredentials([
-                string(credentialsId: 'databricks-token', variable: 'DATABRICKS_TOKEN'),
-                string(credentialsId: 'databricks-host', variable: 'DATABRICKS_HOST')
-            ]) {
-                script {
-                    try {
+            script {
+                try {
+                    withCredentials([
+                        string(credentialsId: 'databricks-token', variable: 'DATABRICKS_TOKEN'),
+                        string(credentialsId: 'databricks-host', variable: 'DATABRICKS_HOST')
+                    ]) {
                         sh '''
-                            mkdir -p ai/reports
-
                             set +e
+
+                            mkdir -p "$WORKSPACE/ai/reports"
 
                             echo "Collecting Kubernetes diagnostics..."
 
                             kubectl -n "$K8S_NAMESPACE" get deployment "$K8S_DEPLOYMENT" \
-                                > ai/reports/deployment.txt 2>&1
+                                > "$WORKSPACE/ai/reports/deployment_status.txt" 2>&1
 
                             kubectl -n "$K8S_NAMESPACE" get pods -o wide \
-                                > ai/reports/pods.txt 2>&1
+                                > "$WORKSPACE/ai/reports/pods.txt" 2>&1
 
                             kubectl -n "$K8S_NAMESPACE" get events \
                                 --sort-by=.lastTimestamp \
-                                > ai/reports/events.txt 2>&1
+                                > "$WORKSPACE/ai/reports/events.txt" 2>&1
 
-                            echo "Collecting Jenkins console log..."
-                            echo "See Jenkins build console output for full pipeline logs." \
-                                > ai/reports/jenkins.log
+                            echo "Updating AI application files..."
 
-                            cat > ai/reports/ai_input.json <<'JSON'
-{
-    "build_number": "BUILD_NUMBER_PLACEHOLDER",
+                            mkdir -p "$AI_DIR/ai"
+
+                            cp -a "$WORKSPACE/ai/." "$AI_DIR/ai/"
+
+                            echo "Preparing actual pipeline diagnostics..."
+
+                            "$AI_PYTHON" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+reports = Path(os.environ["WORKSPACE"]) / "ai" / "reports"
+
+def read_report(filename):
+    path = reports / filename
+    if path.is_file():
+        return path.read_text(encoding="utf-8", errors="replace")
+    return f"{filename}: Not available. The stage may not have executed."
+
+def combine(*filenames):
+    return "\\n\\n".join(
+        f"===== {filename} =====\\n{read_report(filename)}"
+        for filename in filenames
+    )
+
+data = {
+    "build_number": os.environ["BUILD_NUMBER"],
     "build_status": "FAILED",
-    "jenkins_logs": "Jenkins pipeline failed. Inspect the failed stage and console output.",
-    "trivy_output": "See archived pipeline logs for Trivy scan results.",
-    "pip_audit_output": "See archived pipeline logs for pip-audit results.",
-    "sonar_output": "See archived pipeline logs for SonarQube results.",
-    "deployment_status": "See deployment diagnostics.",
-    "pod_status": "See pod diagnostics.",
-    "kubernetes_events": "See Kubernetes event diagnostics."
+    "jenkins_logs": combine(
+        "setup.log",
+        "dependencies.log",
+        "pytest.log",
+        "deployment.log",
+        "kubernetes_verify.log"
+    ),
+    "trivy_output": combine(
+        "trivy_fs.log",
+        "trivy_image.log"
+    ),
+    "pip_audit_output": read_report("pip_audit.log"),
+    "sonar_output": read_report("sonar.log"),
+    "deployment_status": combine(
+        "deployment.log",
+        "deployment_status.txt"
+    ),
+    "pod_status": read_report("pods.txt"),
+    "kubernetes_events": read_report("events.txt")
 }
-JSON
 
-                            sed -i "s/BUILD_NUMBER_PLACEHOLDER/$BUILD_NUMBER/" \
-                                ai/reports/ai_input.json
-
-                            cp ai/reports/ai_input.json \
-                                /opt/devsecops-ai/ai_input.json
-
-                            chown jenkins:jenkins /opt/devsecops-ai/ai_input.json
+output = reports / "ai_input.json"
+output.write_text(json.dumps(data, indent=2), encoding="utf-8")
+print(f"AI input created: {output}")
+PY
 
                             echo "Running three-agent AI analysis..."
 
                             cd "$AI_DIR"
 
-                            DATABRICKS_HOST="$DATABRICKS_HOST" \
-                            DATABRICKS_TOKEN="$DATABRICKS_TOKEN" \
-                            DATABRICKS_ENDPOINT="databricks-llama-4-maverick" \
-                            AI_INPUT_FILE="/opt/devsecops-ai/ai_input.json" \
-                            AI_REPORT_FILE="$WORKSPACE/ai/reports/ai_report.txt" \
-                            PYTHONPATH="$AI_DIR" \
+                            export PYTHONPATH="$AI_DIR"
+                            export DATABRICKS_HOST
+                            export DATABRICKS_TOKEN
+                            export DATABRICKS_ENDPOINT="databricks-llama-4-maverick"
+                            export AI_INPUT_FILE="$WORKSPACE/ai/reports/ai_input.json"
+                            export AI_REPORT_FILE="$WORKSPACE/ai/reports/ai_report.txt"
+
                             "$AI_PYTHON" -m ai.run_ai \
                                 > "$WORKSPACE/ai/reports/ai_execution.log" 2>&1
 
@@ -501,14 +669,16 @@ JSON
                             cat "$WORKSPACE/ai/reports/ai_execution.log"
 
                             if [ "$AI_EXIT_CODE" -ne 0 ]; then
-                                echo "AI diagnosis failed with exit code $AI_EXIT_CODE."
+                                echo "AI analysis failed with exit code $AI_EXIT_CODE."
+                            else
+                                echo "AI analysis completed."
                             fi
 
                             exit 0
                         '''
-                    } catch (Exception error) {
-                        echo "AI diagnosis encountered an error: ${error.getMessage()}"
                     }
+                } catch (Exception error) {
+                    echo "AI diagnosis encountered an error: ${error.getMessage()}"
                 }
             }
         }
