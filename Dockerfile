@@ -1,3 +1,4 @@
+
 FROM python:3.13-slim AS builder
 
 WORKDIR /build
@@ -17,6 +18,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /install /usr/local
+
+# Remove pip from the runtime image.
+# Pip is not required to run the application.
+RUN rm -rf \
+    /usr/local/lib/python3.13/site-packages/pip \
+    /usr/local/lib/python3.13/site-packages/pip-*.dist-info \
+    /usr/local/bin/pip \
+    /usr/local/bin/pip3 \
+    /usr/local/bin/pip3.13
 
 COPY app ./app
 
